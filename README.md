@@ -81,12 +81,7 @@ ContentCreator Hub is built using Clarity smart contracts on the Stacks blockcha
 
 2. Test the contract locally:
    ```bash
-   clarinet test
-   ```
-
-3. Deploy to testnet or mainnet using Clarinet:
-   ```bash
-   clarinet deploy --testnet
+   npm test
    ```
 
 ### Usage Example
