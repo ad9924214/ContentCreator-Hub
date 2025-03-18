@@ -1,6 +1,4 @@
-# ContentCreator Hub
- 
-# ContentCreator Hub
+ # ContentCreator Hub
 
 A decentralized Patreon-style platform built on Stacks blockchain that enables content creators to monetize their work through multi-tier subscriptions while providing subscribers with exclusive access to content.
 
