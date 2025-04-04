@@ -361,3 +361,215 @@
   )
 )
 
+;; Add to constants
+(define-constant ERR-COMMENT-NOT-FOUND (err u106))
+
+;; Add new data map for comments
+(define-map content-comments
+  { comment-id: uint, content-id: uint }
+  {
+    author: principal,
+    text: (string-utf8 500),
+    created-at: uint
+  }
+)
+
+;; Add data var for comment IDs
+(define-data-var next-comment-id uint u1)
+
+;; Add function to create comments
+(define-public (add-comment (content-id uint) (text (string-utf8 500)))
+  (let
+    ((comment-id (var-get next-comment-id))
+     (content (unwrap! (map-get? content-items { content-id: content-id }) ERR-INVALID-CONTENT)))
+    
+    ;; Check if content exists and is published
+    (asserts! (<= (get publish-at content) stacks-block-height) ERR-INVALID-CONTENT)
+    
+    (map-set content-comments
+      { comment-id: comment-id, content-id: content-id }
+      {
+        author: tx-sender,
+        text: text,
+        created-at: stacks-block-height
+      }
+    )
+    (var-set next-comment-id (+ comment-id u1))
+    (ok comment-id)
+  )
+)
+
+
+;; Add to constants
+(define-constant ERR-INVALID-RATING (err u107))
+
+;; Add new data map for ratings
+(define-map content-ratings
+  { content-id: uint }
+  {
+    total-rating: uint,
+    rating-count: uint,
+    average-rating: uint
+  }
+)
+
+;; Add function to rate content
+(define-public (rate-content (content-id uint) (rating uint))
+  (let
+    ((content (unwrap! (map-get? content-items { content-id: content-id }) ERR-INVALID-CONTENT))
+     (current-ratings (default-to { total-rating: u0, rating-count: u0, average-rating: u0 } 
+                     (map-get? content-ratings { content-id: content-id }))))
+    
+    ;; Validate rating (1-5)
+    (asserts! (and (>= rating u1) (<= rating u5)) ERR-INVALID-RATING)
+    
+    (map-set content-ratings
+      { content-id: content-id }
+      {
+        total-rating: (+ (get total-rating current-ratings) rating),
+        rating-count: (+ (get rating-count current-ratings) u1),
+        average-rating: (/ (+ (get total-rating current-ratings) rating) 
+                         (+ (get rating-count current-ratings) u1))
+      }
+    )
+    (ok true)
+  )
+)
+
+
+;; Add new data map for tips
+(define-map creator-tips
+  { creator-id: uint }
+  {
+    total-tips: uint,
+    tip-count: uint
+  }
+)
+
+;; Add function to send tips
+(define-public (send-tip (creator-id uint) (amount uint) (token-contract principal))
+  (let
+    ((creator-data (unwrap! (map-get? creators { creator-id: creator-id }) ERR-INVALID-TIER))
+     (tip-data (default-to { total-tips: u0, tip-count: u0 } 
+               (map-get? creator-tips { creator-id: creator-id }))))
+    
+    ;; Update tip statistics
+    (map-set creator-tips
+      { creator-id: creator-id }
+      {
+        total-tips: (+ (get total-tips tip-data) amount),
+        tip-count: (+ (get tip-count tip-data) u1)
+      }
+    )
+    (ok true)
+  )
+)
+
+
+;; Add new data map for revenue tracking
+(define-map creator-revenue
+  { creator-id: uint }
+  {
+    total-earnings: uint,
+    subscription-revenue: uint,
+    tip-revenue: uint,
+    last-payout: uint
+  }
+)
+
+;; Add function to track revenue
+(define-public (track-creator-earnings (creator-id uint) (amount uint) (revenue-type (string-ascii 20)))
+  (let
+    ((revenue-data (default-to { total-earnings: u0, subscription-revenue: u0, 
+                               tip-revenue: u0, last-payout: u0 }
+                  (map-get? creator-revenue { creator-id: creator-id }))))
+    
+    (map-set creator-revenue
+      { creator-id: creator-id }
+      (merge revenue-data 
+        {
+          total-earnings: (+ (get total-earnings revenue-data) amount),
+          subscription-revenue: (if (is-eq revenue-type "subscription")
+                                  (+ (get subscription-revenue revenue-data) amount)
+                                  (get subscription-revenue revenue-data)),
+          tip-revenue: (if (is-eq revenue-type "tip")
+                          (+ (get tip-revenue revenue-data) amount)
+                          (get tip-revenue revenue-data))
+        }
+      )
+    )
+    (ok true)
+  )
+)
+
+
+;; Add new data map for scheduled content
+(define-map content-schedule
+  { creator-id: uint }
+  {
+    upcoming-contents: (list 20 uint),
+    next-publish-height: uint
+  }
+)
+
+;; Add function to schedule content
+(define-public (schedule-content (creator-id uint) (content-id uint) (publish-height uint))
+  (let
+    ((schedule-data (default-to { upcoming-contents: (list ), next-publish-height: u0 }
+                   (map-get? content-schedule { creator-id: creator-id }))))
+    
+    (map-set content-schedule
+      { creator-id: creator-id }
+      {
+        upcoming-contents: (unwrap! (as-max-len? 
+       (append (get upcoming-contents schedule-data) content-id)
+                                    u20)
+                                  ERR-NOT-AUTHORIZED),
+        next-publish-height: publish-height
+      }
+    )
+    (ok true)
+  )
+)
+
+
+;; Add new data map for notifications
+(define-map subscriber-notifications
+  { subscriber: principal }
+  {
+    notifications: (list 50 {
+      content-id: uint,
+      creator-id: uint,
+      notification-type: (string-ascii 20),
+      created-at: uint,
+      read: bool
+    })
+  }
+)
+
+;; Add function to create notification
+(define-public (create-notification (subscriber principal) (content-id uint) 
+    (creator-id uint) (notification-type (string-ascii 20)))
+  (let
+    ((current-notifications (default-to { notifications: (list ) }
+        (map-get? subscriber-notifications { subscriber: subscriber }))))
+    
+    (map-set subscriber-notifications
+      { subscriber: subscriber }
+      {
+        notifications: (unwrap! (as-max-len? 
+          (append (get notifications current-notifications)
+            {
+              content-id: content-id,
+              creator-id: creator-id,
+              notification-type: notification-type,
+              created-at: stacks-block-height,
+              read: false
+            })
+          u50)
+        ERR-NOT-AUTHORIZED)
+      }
+    )
+    (ok true)
+  )
+)
