@@ -573,3 +573,102 @@
     (ok true)
   )
 )
+
+
+(define-constant ERR-INVALID-COLLABORATION (err u108))
+(define-constant ERR-ALREADY-COLLABORATING (err u109))
+
+(define-map collaborations
+  { collaboration-id: uint }
+  {
+    primary-creator: uint,
+    collaborator: uint,
+    revenue-split: uint,
+    start-height: uint,
+    end-height: uint,
+    status: (string-ascii 20)
+  }
+)
+
+(define-data-var next-collaboration-id uint u1)
+
+(define-public (create-collaboration 
+    (primary-creator-id uint)
+    (collaborator-id uint)
+    (revenue-split uint)
+    (duration uint)
+  )
+  (let
+    ((collaboration-id (var-get next-collaboration-id))
+     (primary-creator (unwrap! (map-get? creators { creator-id: primary-creator-id }) ERR-INVALID-TIER))
+     (end-height (+ stacks-block-height duration)))
+    
+    (asserts! (is-eq tx-sender (get principal primary-creator)) ERR-NOT-AUTHORIZED)
+    (asserts! (<= revenue-split u100) ERR-INVALID-COLLABORATION)
+    
+    (map-set collaborations
+      { collaboration-id: collaboration-id }
+      {
+        primary-creator: primary-creator-id,
+        collaborator: collaborator-id,
+        revenue-split: revenue-split,
+        start-height: stacks-block-height,
+        end-height: end-height,
+        status: "active"
+      }
+    )
+    
+    (var-set next-collaboration-id (+ collaboration-id u1))
+    (ok collaboration-id)
+  )
+)
+
+
+(define-constant ERR-INVALID-BUNDLE (err u110))
+(define-constant ERR-BUNDLE-LIMIT-REACHED (err u111))
+
+(define-map content-bundles
+  { bundle-id: uint }
+  {
+    creator-id: uint,
+    name: (string-ascii 64),
+    description: (string-utf8 500),
+    content-ids: (list 10 uint),
+    price: uint,
+    valid-until: uint
+  }
+)
+
+(define-data-var next-bundle-id uint u1)
+
+(define-public (create-content-bundle
+    (creator-id uint)
+    (name (string-ascii 64))
+    (description (string-utf8 500))
+    (content-ids (list 10 uint))
+    (price uint)
+    (duration uint)
+  )
+  (let
+    ((bundle-id (var-get next-bundle-id))
+     (creator-data (unwrap! (map-get? creators { creator-id: creator-id }) ERR-INVALID-TIER))
+     (valid-until (+ stacks-block-height duration)))
+    
+    (asserts! (is-eq tx-sender (get principal creator-data)) ERR-NOT-AUTHORIZED)
+    
+    (map-set content-bundles
+      { bundle-id: bundle-id }
+      {
+        creator-id: creator-id,
+        name: name,
+        description: description,
+        content-ids: content-ids,
+        price: price,
+        valid-until: valid-until
+      }
+    )
+    
+    (var-set next-bundle-id (+ bundle-id u1))
+    (ok bundle-id)
+  )
+)
