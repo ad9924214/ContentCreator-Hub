@@ -17,6 +17,58 @@
 (define-constant ERR-INVALID-CONTENT (err u104))
 (define-constant ERR-INSUFFICIENT-TOKENS (err u105))
 
+(define-constant ERR-INVALID-MILESTONE (err u112))
+(define-constant ERR-MILESTONE-NOT-READY (err u113))
+(define-constant ERR-FUNDING-GOAL-NOT-MET (err u114))
+(define-constant ERR-PROJECT-ENDED (err u115))
+(define-constant ERR-ALREADY-FUNDED (err u116))
+
+(define-data-var next-project-id uint u1)
+(define-data-var next-milestone-id uint u1)
+
+(define-map funding-projects
+  { project-id: uint }
+  {
+    creator-id: uint,
+    title: (string-ascii 128),
+    description: (string-utf8 1000),
+    funding-goal: uint,
+    current-funding: uint,
+    deadline: uint,
+    status: (string-ascii 20),
+    created-at: uint
+  }
+)
+
+(define-map project-milestones
+  { project-id: uint, milestone-id: uint }
+  {
+    title: (string-ascii 128),
+    description: (string-utf8 500),
+    funding-percentage: uint,
+    completed: bool,
+    verified: bool,
+    due-date: uint
+  }
+)
+
+(define-map project-backers
+  { project-id: uint, backer: principal }
+  {
+    amount-funded: uint,
+    funding-date: uint
+  }
+)
+
+(define-map milestone-funds
+  { project-id: uint, milestone-id: uint }
+  {
+    allocated-amount: uint,
+    released: bool,
+    release-date: uint
+  }
+)
+
 ;; data vars
 (define-data-var next-creator-id uint u1)
 (define-data-var next-content-id uint u1)
@@ -670,5 +722,198 @@
     
     (var-set next-bundle-id (+ bundle-id u1))
     (ok bundle-id)
+  )
+)
+
+(define-public (create-funding-project
+    (creator-id uint)
+    (title (string-ascii 128))
+    (description (string-utf8 1000))
+    (funding-goal uint)
+    (duration uint)
+  )
+  (let
+    ((project-id (var-get next-project-id))
+     (creator-data (unwrap! (map-get? creators { creator-id: creator-id }) ERR-INVALID-TIER))
+     (deadline (+ stacks-block-height duration)))
+    
+    (asserts! (is-eq tx-sender (get principal creator-data)) ERR-NOT-AUTHORIZED)
+    (asserts! (> funding-goal u0) ERR-INVALID-MILESTONE)
+    
+    (map-set funding-projects
+      { project-id: project-id }
+      {
+        creator-id: creator-id,
+        title: title,
+        description: description,
+        funding-goal: funding-goal,
+        current-funding: u0,
+        deadline: deadline,
+        status: "active",
+        created-at: stacks-block-height
+      }
+    )
+    
+    (var-set next-project-id (+ project-id u1))
+    (ok project-id)
+  )
+)
+
+(define-public (add-project-milestone
+    (project-id uint)
+    (title (string-ascii 128))
+    (description (string-utf8 500))
+    (funding-percentage uint)
+    (due-date uint)
+  )
+  (let
+    ((milestone-id (var-get next-milestone-id))
+     (project-data (unwrap! (map-get? funding-projects { project-id: project-id }) ERR-INVALID-MILESTONE))
+     (creator-data (unwrap! (map-get? creators { creator-id: (get creator-id project-data) }) ERR-INVALID-TIER)))
+    
+    (asserts! (is-eq tx-sender (get principal creator-data)) ERR-NOT-AUTHORIZED)
+    (asserts! (and (> funding-percentage u0) (<= funding-percentage u100)) ERR-INVALID-MILESTONE)
+    (asserts! (is-eq (get status project-data) "active") ERR-PROJECT-ENDED)
+    
+    (map-set project-milestones
+      { project-id: project-id, milestone-id: milestone-id }
+      {
+        title: title,
+        description: description,
+        funding-percentage: funding-percentage,
+        completed: false,
+        verified: false,
+        due-date: due-date
+      }
+    )
+    
+    (var-set next-milestone-id (+ milestone-id u1))
+    (ok milestone-id)
+  )
+)
+
+(define-public (fund-project (project-id uint) (amount uint))
+  (let
+    ((project-data (unwrap! (map-get? funding-projects { project-id: project-id }) ERR-INVALID-MILESTONE))
+     (existing-backing (map-get? project-backers { project-id: project-id, backer: tx-sender }))
+     (current-amount (if (is-some existing-backing) (get amount-funded (unwrap-panic existing-backing)) u0)))
+    
+    (asserts! (is-eq (get status project-data) "active") ERR-PROJECT-ENDED)
+    (asserts! (< stacks-block-height (get deadline project-data)) ERR-PROJECT-ENDED)
+    (asserts! (> amount u0) ERR-INVALID-MILESTONE)
+    
+    (map-set project-backers
+      { project-id: project-id, backer: tx-sender }
+      {
+        amount-funded: (+ current-amount amount),
+        funding-date: stacks-block-height
+      }
+    )
+    
+    (map-set funding-projects
+      { project-id: project-id }
+      (merge project-data { current-funding: (+ (get current-funding project-data) amount) })
+    )
+    
+    (ok true)
+  )
+)
+
+(define-public (complete-milestone (project-id uint) (milestone-id uint))
+  (let
+    ((project-data (unwrap! (map-get? funding-projects { project-id: project-id }) ERR-INVALID-MILESTONE))
+     (milestone-data (unwrap! (map-get? project-milestones { project-id: project-id, milestone-id: milestone-id }) ERR-INVALID-MILESTONE))
+     (creator-data (unwrap! (map-get? creators { creator-id: (get creator-id project-data) }) ERR-INVALID-TIER)))
+    
+    (asserts! (is-eq tx-sender (get principal creator-data)) ERR-NOT-AUTHORIZED)
+    (asserts! (not (get completed milestone-data)) ERR-INVALID-MILESTONE)
+    (asserts! (>= (get current-funding project-data) (get funding-goal project-data)) ERR-FUNDING-GOAL-NOT-MET)
+    
+    (map-set project-milestones
+      { project-id: project-id, milestone-id: milestone-id }
+      (merge milestone-data { completed: true })
+    )
+    
+    (ok true)
+  )
+)
+
+(define-public (verify-milestone (project-id uint) (milestone-id uint))
+  (let
+    ((project-data (unwrap! (map-get? funding-projects { project-id: project-id }) ERR-INVALID-MILESTONE))
+     (milestone-data (unwrap! (map-get? project-milestones { project-id: project-id, milestone-id: milestone-id }) ERR-INVALID-MILESTONE))
+     (creator-data (unwrap! (map-get? creators { creator-id: (get creator-id project-data) }) ERR-INVALID-TIER))
+     (funding-amount (/ (* (get current-funding project-data) (get funding-percentage milestone-data)) u100)))
+    
+    (asserts! (get completed milestone-data) ERR-MILESTONE-NOT-READY)
+    (asserts! (not (get verified milestone-data)) ERR-INVALID-MILESTONE)
+    
+    (map-set project-milestones
+      { project-id: project-id, milestone-id: milestone-id }
+      (merge milestone-data { verified: true })
+    )
+    
+    (map-set milestone-funds
+      { project-id: project-id, milestone-id: milestone-id }
+      {
+        allocated-amount: funding-amount,
+        released: true,
+        release-date: stacks-block-height
+      }
+    )
+    
+    (ok funding-amount)
+  )
+)
+
+(define-public (refund-project (project-id uint))
+  (let
+    ((project-data (unwrap! (map-get? funding-projects { project-id: project-id }) ERR-INVALID-MILESTONE))
+     (backer-data (unwrap! (map-get? project-backers { project-id: project-id, backer: tx-sender }) ERR-NOT-SUBSCRIBED)))
+    
+    (asserts! (or 
+      (> stacks-block-height (get deadline project-data))
+      (is-eq (get status project-data) "cancelled")
+    ) ERR-PROJECT-ENDED)
+    (asserts! (< (get current-funding project-data) (get funding-goal project-data)) ERR-FUNDING-GOAL-NOT-MET)
+    
+    (map-delete project-backers { project-id: project-id, backer: tx-sender })
+    
+    (map-set funding-projects
+      { project-id: project-id }
+      (merge project-data { current-funding: (- (get current-funding project-data) (get amount-funded backer-data)) })
+    )
+    
+    (ok (get amount-funded backer-data))
+  )
+)
+
+(define-read-only (get-project-details (project-id uint))
+  (map-get? funding-projects { project-id: project-id })
+)
+
+(define-read-only (get-milestone-details (project-id uint) (milestone-id uint))
+  (map-get? project-milestones { project-id: project-id, milestone-id: milestone-id })
+)
+
+(define-read-only (get-backer-contribution (project-id uint) (backer principal))
+  (map-get? project-backers { project-id: project-id, backer: backer })
+)
+
+(define-read-only (get-milestone-funding (project-id uint) (milestone-id uint))
+  (map-get? milestone-funds { project-id: project-id, milestone-id: milestone-id })
+)
+
+(define-read-only (get-project-progress (project-id uint))
+  (let
+    ((project-data (unwrap! (map-get? funding-projects { project-id: project-id }) (err u0))))
+    (ok {
+      funding-percentage: (/ (* (get current-funding project-data) u100) (get funding-goal project-data)),
+      current-funding: (get current-funding project-data),
+      funding-goal: (get funding-goal project-data),
+      time-remaining: (if (> (get deadline project-data) stacks-block-height)
+                        (- (get deadline project-data) stacks-block-height)
+                        u0)
+    })
   )
 )
