@@ -15,11 +15,6 @@ path = 'contracts/verification-system.clar'
 clarity_version = 3
 epoch = 3.1
 
-[contracts.content-discovery]
-path = 'contracts/content-discovery.clar'
-clarity_version = 3
-epoch = 3.1
-
 [repl.analysis]
 passes = ['check_checker']
 
